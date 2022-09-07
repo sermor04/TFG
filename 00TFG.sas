@@ -8,7 +8,7 @@
 
 libname st "C:\Users\HP\OneDrive\Escritorio\UNIVERSIDAD\TFG";
 
-proc import file="C:\Users\HP\OneDrive\Escritorio\UNIVERSIDAD\TFG\eurusdclose.csv"
+proc import file="C:\Users\HP\OneDrive\Escritorio\UNIVERSIDAD\TFG\datosclose.csv"
     out=st.EURUSDc
     dbms=csv
 	replace;
@@ -237,9 +237,100 @@ quit;
 
 proc autoreg data=work.salidaARIMA;
   model residual=/garch=(q=1,p=1, type=igarch);
+  output out
+=pp cpev=volatilidad;
 run;
 quit;
 
+%macro simula_predicciones_autoreg_vol(
+  tabla_entrada=,
+  idFecha=,
+  fecha_inicial=,
+  fecha_final=,
+  modelo_autoreg=,
+  variable=,
+  horizonte=,
+  tabla_salida=);
+
+  data _null_;
+    call symput('contador_fecha_inicial',&fecha_inicial-&horizonte+1);
+    call symput('contador_fecha_final',&fecha_final);
+  run;
+
+  data WORK.COPIA_TABLA_ENTRADA;
+    set &tabla_entrada;
+  run;
+
+  data &tabla_salida;
+    length ERROR 8.;
+    stop;
+  run;
+
+  %do contador_fecha=&contador_fecha_inicial %to &contador_fecha_final;
+
+    data WORK.HISTORICO_HASTA_&contador_fecha;
+      set WORK.COPIA_TABLA_ENTRADA;
+      COPIA_VARIABLE=&variable;
+      if &idFecha>=&contador_fecha then do;
+        &variable=.;
+      end;
+      where &idFecha<=&contador_fecha+&horizonte-1;
+    run;
+
+    %let converge=0;
+
+  	proc autoreg data=WORK.HISTORICO_HASTA_&contador_fecha;
+  	  &modelo_autoreg noprint;
+  	  output out=WORK.SALIDA_HASTA_&contador_fecha(where=(&variable=.)) cpev=volatilidad;
+  	run;
+  	quit;
+
+    data WORK.SALIDA_HASTA_&contador_fecha; 
+      set WORK.SALIDA_HASTA_&contador_fecha;
+      HORIZONTE=_n_;
+    run;
+
+    data &tabla_salida;
+      set &tabla_salida
+      WORK.SALIDA_HASTA_&contador_fecha(keep=Date &idFecha &variable volatilidad HORIZONTE)
+      ;
+      format &idFecha date9.;
+    run;
+
+  %end;
+
+  proc sort data=&tabla_salida(where=(&idFecha>=&fecha_inicial and &idFecha<=&fecha_final));
+    by HORIZONTE;
+  run;
+  quit;
+
+  %do contador_fecha=&contador_fecha_inicial %to &contador_fecha_final;
+
+    proc sql;
+      drop table WORK.HISTORICO_HASTA_&contador_fecha,WORK.SALIDA_HASTA_&contador_fecha;
+    run;
+    quit;
+
+  %end;
+
+%mend simula_predicciones_autoreg_vol;
+
+data work.paraSimular(where=(retorno ne .));
+  set work.Eurusdc;
+  retorno=recuerdaLogClose-lag(recuerdaLogClose);
+  fechaSinFinesDeSemana=_n_;
+run;
+
+%simula_predicciones_autoreg_vol(
+  tabla_entrada=work.paraSimular,
+  idFecha=fechaSinFinesDeSemana,
+  fecha_inicial=2973,
+  fecha_final=3391,
+  modelo_autoreg= model retorno=/garch=(q=1,p=1, type=igarch),
+  variable=retorno,
+  horizonte=1,
+  tabla_salida=work.predVolatilidadIGARCH11
+);
 
 /******************/
 /******************/
